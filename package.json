@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "start": "./start.sh start",
+    "stop": "./start.sh stop",
+    "restart": "./start.sh restart",
+    "status": "./start.sh status"
+  }
+}

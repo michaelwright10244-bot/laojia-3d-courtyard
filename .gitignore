@@ -1,0 +1,10 @@
+# Local runtime files
+.pids/
+logs/
+
+# Environment overrides
+.env
+
+# Dependencies / caches
+node_modules/
+.DS_Store
