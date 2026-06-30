@@ -135,7 +135,7 @@ ensure_port_available() {
 
 start_frontend() {
   : > "$LOG_FILE"
-  setsid nohup python3 -m http.server "$PORT" --bind "$HOST" > "$LOG_FILE" 2>&1 &
+  setsid nohup npm run dev -- --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
 }
 
@@ -152,12 +152,12 @@ wait_for_port() {
 }
 
 start_service() {
-  require_command python3
+  require_command npm
   log_info "正在清理旧的本地服务..."
   stop_service
   ensure_port_available
 
-  log_info "正在启动老家 3D 宅院模型： http://localhost:${PORT}"
+  log_info "正在启动老家 TvT/Vite 小城市： http://localhost:${PORT}"
   start_frontend
 
   if wait_for_port; then
@@ -198,7 +198,7 @@ case "$cmd" in
     ;;
   stop)
     stop_service
-    log_info "老家 3D 宅院模型服务已停止"
+    log_info "老家 TvT/Vite 小城市服务已停止"
     ;;
   restart)
     stop_service
