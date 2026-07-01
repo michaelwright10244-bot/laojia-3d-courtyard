@@ -23,11 +23,10 @@ if (renderer.shadowMap) {
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
-renderBadge.textContent = useWebGPU ? 'WebGPU 增强渲染' : 'WebGL 兼容渲染';
+renderBadge.textContent = useWebGPU ? 'WebGPU 梦境增强' : 'WebGL 兼容梦境';
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#b5d9f0');
-scene.fog = new THREE.Fog('#b5d9f0', 86, 240);
 
 const camera = new THREE.OrthographicCamera(-36, 36, 24, -24, 0.1, 360);
 camera.position.set(-64, 76, 118);
@@ -64,10 +63,19 @@ scene.add(ambient, hemi, sun, fill);
 const startTime = performance.now();
 const labels = new THREE.Group();
 const planOverlay = new THREE.Group();
+const gisOverlay = new THREE.Group();
+const gisLayers = {
+  poi: new THREE.Group(),
+  heat: new THREE.Group(),
+  story: new THREE.Group()
+};
+Object.values(gisLayers).forEach(layer => gisOverlay.add(layer));
 const animated = [];
-scene.add(labels, planOverlay);
+scene.add(labels, planOverlay, gisOverlay);
 labels.visible = false;
 planOverlay.visible = false;
+gisOverlay.visible = true;
+gisLayers.story.visible = false;
 let viewMode = 'overview';
 let ecologyRunning = true;
 const keyState = new Set();
@@ -95,12 +103,21 @@ const detailText = document.querySelector('#detail-text');
 const joyZone = document.querySelector('#joy-zone');
 const joyKnob = document.querySelector('#joy-knob');
 const viewToggle = document.querySelector('#view-toggle');
+const layerButtons = document.querySelectorAll('[data-layer]');
+const opsHeartbeat = document.querySelector('#ops-heartbeat');
+const opsDream = document.querySelector('#ops-dream');
+const opsHeat = document.querySelector('#ops-heat');
+const gisLayerState = {
+  poi: true,
+  heat: false,
+  story: false
+};
 const modeCopy = {
-  overview: ['沙盘总览：完整虚拟小城', '保留老家主体，在原 low-poly 风格上按 1格=2m 统一比例扩展 CBD、住宅、校园、古建、游乐、农业和自然景观带。'],
-  walk: ['沉浸漫游：沿主干道/河岸', 'WASD 或安卓摇杆移动，拖动右侧屏幕转向；新增主干道、湖桥、古镇、校园和住宅组团均可绕行。'],
-  guided: ['自动导览：七区巡游', '固定路线：老家→农田→村庄→古镇→游乐区→CBD→学校，展示入口、侧面和纵深。'],
-  eco: ['生态运行：动态开关', '村民、农夫、城市车辆、无人机、炊烟和火光会持续运行；再次点击可暂停或恢复。'],
-  map: ['标注地图：比例校验', '显示主屋结构、7 个功能区、自然景观带以及 1.8m 成人比例尺。']
+  overview: ['终局总览：梦幻 GIS 小城', '从终局效果反推：真实地块和路网作为 GIS 底座，只叠加 POI、人流、生态状态和故事光标，远看清透，近看有生活颗粒。'],
+  walk: ['沉浸漫游：街边级仿真', 'WASD 或安卓摇杆移动，拖动右侧屏幕转向；院落、湖岸、古镇、校园、住宅和 CBD 都能进入近景查看。'],
+  guided: ['梦境导览：一镜到底展示', '固定飞行路线串联老家、农田、村庄、古镇、湖岸、CBD、学校与住宅区，用来给客户直接看最终效果。'],
+  eco: ['仿真运行：城市正在呼吸', '村民、无人机、炊烟、火光和故事光标持续运行；再次点击可暂停或恢复生态系统。'],
+  map: ['GIS 叠加：数据骨架显性化', '显示坐标网格、地块边界、功能分区、POI 光标和 1.8m 比例尺，证明梦幻皮肤下面仍是可扩展的 GIS 数据结构。']
 };
 
 function createSeededRandom(seed) {
@@ -260,24 +277,6 @@ const strawTexture = canvasTexture((ctx, w, h) => {
 });
 strawTexture.repeat.set(4, 4);
 
-const mistTexture = canvasTexture((ctx, w, h) => {
-  ctx.clearRect(0, 0, w, h);
-  const g = ctx.createLinearGradient(0, 0, w, 0);
-  g.addColorStop(0, 'rgba(220,239,233,0)');
-  g.addColorStop(0.22, 'rgba(220,239,233,0.36)');
-  g.addColorStop(0.52, 'rgba(220,239,233,0.5)');
-  g.addColorStop(0.82, 'rgba(220,239,233,0.28)');
-  g.addColorStop(1, 'rgba(220,239,233,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
-  for (let i = 0; i < 180; i += 1) {
-    ctx.fillStyle = `rgba(255,255,255,${0.02 + rand() * 0.05})`;
-    ctx.beginPath();
-    ctx.ellipse(rand() * w, rand() * h, 20 + rand() * 55, 2 + rand() * 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}, 512, 128);
-
 function pixelTexture(base, accents = [], size = 16) {
   return canvasTexture((ctx, w, h) => {
     const cell = w / size;
@@ -371,9 +370,13 @@ const materials = {
   rubber: new THREE.MeshStandardMaterial({ color: '#151719', roughness: 0.74 }),
   windowGlow: new THREE.MeshBasicMaterial({ color: '#ffcf72' }),
   ember: new THREE.MeshBasicMaterial({ color: '#ff7b3d', transparent: true, opacity: 0.82, depthWrite: false }),
-  mist: new THREE.MeshBasicMaterial({ color: '#dcefe9', map: mistTexture, transparent: true, opacity: 0.22, depthWrite: false }),
   road: new THREE.MeshStandardMaterial({ color: '#9c927f', roughness: 0.96 }),
   roadEdge: new THREE.MeshStandardMaterial({ color: '#ddd0a6', roughness: 0.88 }),
+  sidewalk: new THREE.MeshStandardMaterial({ color: '#d8d0bd', roughness: 0.92 }),
+  laneMark: new THREE.MeshBasicMaterial({ color: '#fff3c4' }),
+  plazaTile: new THREE.MeshStandardMaterial({ color: '#b7afa1', roughness: 0.94 }),
+  reed: new THREE.MeshStandardMaterial({ color: '#7d8f47', roughness: 1 }),
+  rail: new THREE.MeshStandardMaterial({ color: '#d9c7a0', roughness: 0.72 }),
   crop: new THREE.MeshStandardMaterial({ color: '#6fab43', roughness: 0.92 }),
   cropGold: new THREE.MeshStandardMaterial({ color: '#d1a94a', roughness: 0.95 }),
   water: new THREE.MeshPhysicalMaterial({ color: '#61c8df', roughness: 0.2, transparent: true, opacity: 0.72, clearcoat: 0.35 }),
@@ -557,12 +560,60 @@ function createDoorAssembly() {
   return applyShadows(group);
 }
 
+function createMainHouseDetailLayer(width, depth, baseTop, wallHeight, lowerFrontZ) {
+  const group = new THREE.Group();
+  const frontZ = lowerFrontZ + 0.14;
+  const backZ = -depth / 2 - 0.08;
+  const cornerMat = new THREE.MeshStandardMaterial({ color: '#ede7da', map: plasterTexture, roughness: 0.96 });
+  const sillMat = new THREE.MeshStandardMaterial({ color: '#d7d0c0', roughness: 0.9 });
+  const shadowMat = new THREE.MeshStandardMaterial({ color: '#c9bdaa', roughness: 0.94 });
+
+  group.add(box(width + 0.22, 0.34, 0.18, materials.dirtyWall, 0, baseTop + 0.16, frontZ));
+  group.add(box(width + 0.26, 0.12, 0.17, materials.trim, 0, baseTop + 2.62, frontZ + 0.02));
+  group.add(box(width + 0.08, 0.06, 0.12, shadowMat, 0, baseTop + 2.48, frontZ + 0.04));
+
+  [-1, 1].forEach((side) => {
+    const x = side * (width / 2 - 0.12);
+    group.add(box(0.22, wallHeight - 0.32, 0.24, cornerMat, x, baseTop + (wallHeight - 0.32) / 2, frontZ));
+    group.add(box(0.22, wallHeight - 0.42, 0.18, cornerMat, x, baseTop + (wallHeight - 0.42) / 2, backZ));
+  });
+
+  [-4.9, 4.9].forEach((x) => {
+    group.add(box(2.16, 0.12, 0.34, sillMat, x, baseTop + 2.18, frontZ + 0.08));
+    group.add(box(2.0, 0.08, 0.28, materials.trim, x, baseTop + 0.66, frontZ + 0.1));
+  });
+  [-4.85, 0, 4.85].forEach((x) => {
+    group.add(box(1.66, 0.08, 0.24, sillMat, x, baseTop + 3.92, depth / 2 + 0.82));
+  });
+
+  const porchAwning = box(3.05, 0.16, 0.64, sillMat, 0, baseTop + 2.72, lowerFrontZ + 0.43);
+  porchAwning.rotation.x = THREE.MathUtils.degToRad(-4);
+  group.add(porchAwning);
+  group.add(box(0.36, 0.12, 0.26, materials.portal, -1.34, baseTop + 2.59, lowerFrontZ + 0.38));
+  group.add(box(0.36, 0.12, 0.26, materials.portal, 1.34, baseTop + 2.59, lowerFrontZ + 0.38));
+
+  const frontGutter = cylinder(0.045, 0.045, width + 1.4, materials.pipe, 16);
+  frontGutter.rotation.z = Math.PI / 2;
+  frontGutter.position.set(0, baseTop + wallHeight + 0.03, depth / 2 + 0.86);
+  const backGutter = frontGutter.clone();
+  backGutter.position.z = -depth / 2 - 0.74;
+  group.add(frontGutter, backGutter);
+
+  const meter = box(0.42, 0.5, 0.08, materials.frame, 2.42, baseTop + 1.28, frontZ + 0.08);
+  const meterFace = box(0.28, 0.22, 0.03, materials.windowGlow, 2.42, baseTop + 1.34, frontZ + 0.14);
+  meter.userData.noShadow = true;
+  meterFace.userData.noShadow = true;
+  group.add(meter, meterFace);
+
+  return applyShadows(group);
+}
+
 function createMainHouse() {
   const group = new THREE.Group();
   const width = 15.0;
   const depth = 11.2;
-  const wallHeight = 4.28;
-  const roofRise = 1.66;
+  const wallHeight = 4.08;
+  const roofRise = 1.48;
   const baseTop = 0.48;
   const lowerFrontZ = depth / 2 + 0.02;
   const upperFrontZ = depth / 2 + 0.68;
@@ -575,15 +626,17 @@ function createMainHouse() {
   group.add(box(width + 0.18, 0.05, 0.08, materials.dark, 0, baseTop + 2.76, depth / 2 - 0.03));
   group.add(box(width - 0.15, 0.05, 0.12, materials.trim, 0, baseTop + 2.95, lowerFrontZ + 0.09));
 
-  const portal = box(2.46, 2.82, 0.24, materials.portal, 0, baseTop + 1.42, lowerFrontZ + 0.06);
+  group.add(createMainHouseDetailLayer(width, depth, baseTop, wallHeight, lowerFrontZ));
+
+  const portal = box(2.28, 2.54, 0.24, materials.portal, 0, baseTop + 1.27, lowerFrontZ + 0.06);
   group.add(portal);
   const door = createDoorAssembly();
-  door.scale.set(0.92, 0.92, 1);
-  door.position.set(0, baseTop + 1.33, lowerFrontZ + 0.16);
+  door.scale.set(0.84, 0.84, 1);
+  door.position.set(0, baseTop + 1.14, lowerFrontZ + 0.16);
   group.add(door);
 
-  [-1.38, 1.38].forEach(x => group.add(box(0.24, 2.15, 0.04, materials.red, x, baseTop + 1.38, lowerFrontZ + 0.26)));
-  group.add(box(1.38, 0.28, 0.04, materials.red, 0, baseTop + 2.55, lowerFrontZ + 0.26));
+  [-1.3, 1.3].forEach(x => group.add(box(0.22, 1.95, 0.04, materials.red, x, baseTop + 1.22, lowerFrontZ + 0.26)));
+  group.add(box(1.28, 0.24, 0.04, materials.red, 0, baseTop + 2.34, lowerFrontZ + 0.26));
   group.add(box(width + 0.5, 0.16, 0.14, materials.eave, 0, baseTop + 2.66, upperFrontZ + 0.24));
 
   [-5.05, 0, 5.05].forEach(x => {
@@ -604,17 +657,19 @@ function createMainHouse() {
     group.add(downPipe, elbow);
   });
 
-  group.add(box(2.8, 0.12, 0.92, materials.concrete, 0, 0.06, lowerFrontZ + 0.52));
+  group.add(box(3.1, 0.12, 1.04, materials.concrete, 0, 0.06, lowerFrontZ + 0.52));
+  group.add(box(2.74, 0.11, 0.82, materials.concrete, 0, 0.19, lowerFrontZ + 0.76));
+  group.add(box(2.36, 0.1, 0.62, materials.concrete, 0, 0.31, lowerFrontZ + 0.96));
 
-  const leftWindow = createFacadeOpening(1.85, 1.62);
-  leftWindow.position.set(-4.9, baseTop + 1.48, lowerFrontZ + 0.03);
-  const rightWindow = createFacadeOpening(1.85, 1.62);
-  rightWindow.position.set(4.9, baseTop + 1.48, lowerFrontZ + 0.03);
+  const leftWindow = createFacadeOpening(1.78, 1.44);
+  leftWindow.position.set(-4.9, baseTop + 1.42, lowerFrontZ + 0.03);
+  const rightWindow = createFacadeOpening(1.78, 1.44);
+  rightWindow.position.set(4.9, baseTop + 1.42, lowerFrontZ + 0.03);
   group.add(leftWindow, rightWindow);
 
   [-4.85, 0, 4.85].forEach(x => {
-    const upper = createFacadeOpening(1.36, 0.82, { frameColor: '#23272c', trimColor: '#79d5e2' });
-    upper.position.set(x, baseTop + 3.55, upperFrontZ + 0.09);
+    const upper = createFacadeOpening(1.28, 0.76, { frameColor: '#23272c', trimColor: '#79d5e2' });
+    upper.position.set(x, baseTop + 3.42, upperFrontZ + 0.09);
     group.add(upper);
   });
 
@@ -1215,8 +1270,127 @@ function createDistantVillage() {
   scene.add(village);
 }
 
-function createAtmosphereVeils() {
-  // The old vertical mist cards looked like blue slabs rising into the sky; keep the scene clean.
+function createAtmosphereVeils() {}
+
+function createMicroPolishDetails() {
+  const polish = new THREE.Group();
+
+  const addBench = (x, z, rot = 0) => {
+    const bench = new THREE.Group();
+    bench.add(box(1.15, 0.12, 0.28, materials.wood, 0, 0.45, 0));
+    bench.add(box(1.15, 0.34, 0.08, materials.wood, 0, 0.68, -0.16));
+    [-0.42, 0.42].forEach(px => bench.add(box(0.08, 0.36, 0.08, materials.frame, px, 0.24, 0.08)));
+    bench.position.set(x, 0.12, z);
+    bench.rotation.y = rot;
+    polish.add(bench);
+  };
+
+  const addLamp = (x, z, color = '#ffd36e') => {
+    const lamp = new THREE.Group();
+    const pole = cylinder(0.035, 0.045, 1.55, materials.frame, 10);
+    pole.position.y = 0.78;
+    lamp.add(pole);
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 8), new THREE.MeshBasicMaterial({ color }));
+    bulb.position.y = 0.84;
+    const light = new THREE.PointLight(color, useWebGPU ? 0.42 : 0.2, 4.2, 1.8);
+    light.position.y = 0.84;
+    lamp.add(bulb, light);
+    lamp.position.set(x, 0.2, z);
+    polish.add(lamp);
+    animated.push((elapsed) => {
+      const pulse = 0.92 + Math.sin(elapsed * 2.0 + x) * 0.06;
+      bulb.scale.setScalar(pulse);
+      light.intensity = (useWebGPU ? 0.38 : 0.18) + Math.sin(elapsed * 1.7 + z) * 0.04;
+    });
+  };
+
+  const addCrosswalk = (x, z, rot = 0, stripes = 5) => {
+    for (let i = 0; i < stripes; i += 1) {
+      const offset = (i - (stripes - 1) / 2) * 0.38;
+      const stripe = box(0.18, 0.035, 1.55, materials.laneMark, x + Math.cos(rot) * offset, 0.155, z - Math.sin(rot) * offset);
+      stripe.rotation.y = rot;
+      stripe.userData.noShadow = true;
+      polish.add(stripe);
+    }
+  };
+
+  const addRail = (ax, az, bx, bz, posts = 8) => {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const len = Math.hypot(dx, dz);
+    const angle = -Math.atan2(dz, dx);
+    const rail = box(len, 0.06, 0.08, materials.rail, (ax + bx) / 2, 0.72, (az + bz) / 2);
+    rail.rotation.y = angle;
+    polish.add(rail);
+    for (let i = 0; i <= posts; i += 1) {
+      const t = i / posts;
+      polish.add(box(0.08, 0.82, 0.08, materials.rail, ax + dx * t, 0.42, az + dz * t));
+    }
+  };
+
+  const addPlanter = (x, z, rot = 0) => {
+    const planter = new THREE.Group();
+    planter.add(box(0.9, 0.28, 0.42, materials.concrete, 0, 0.26, 0));
+    planter.add(box(0.74, 0.08, 0.28, materials.soil, 0, 0.43, 0));
+    [-0.24, 0, 0.24].forEach(px => {
+      const leaf = cylinder(0.055, 0.025, 0.36, materials.leaf, 7);
+      leaf.position.set(px, 0.64, 0);
+      leaf.rotation.z = THREE.MathUtils.degToRad(px * 80);
+      planter.add(leaf);
+    });
+    planter.position.set(x, 0.12, z);
+    planter.rotation.y = rot;
+    polish.add(planter);
+  };
+
+  const lake = roundedPlane(32, 17, 4.4, materials.water);
+  lake.position.set(4.2, 0.31, 45.5);
+  lake.userData.noShadow = true;
+  polish.add(lake);
+  const waveMat = new THREE.MeshBasicMaterial({ color: '#d4fbff', transparent: true, opacity: 0.2, depthWrite: false });
+  const waves = [];
+  for (let i = 0; i < 7; i += 1) {
+    const wave = box(3.8 + i * 0.35, 0.018, 0.045, waveMat.clone(), -7 + i * 3.4, 0.345, 43.4 + Math.sin(i) * 4.7);
+    wave.rotation.y = THREE.MathUtils.degToRad(-8 + i * 3);
+    wave.userData.noShadow = true;
+    wave.userData.anchorX = wave.position.x;
+    polish.add(wave);
+    waves.push(wave);
+  }
+  animated.push((elapsed) => {
+    waves.forEach((wave, i) => {
+      wave.position.x = wave.userData.anchorX + Math.sin(elapsed * 0.8 + i) * 0.08;
+      wave.material.opacity = 0.12 + Math.sin(elapsed * 1.3 + i) * 0.06;
+    });
+  });
+
+  for (let i = 0; i < 18; i += 1) {
+    const paver = box(1.28, 0.035, 0.62, i % 2 ? materials.sidewalk : materials.plazaTile, 7 + i * 1.25, 0.325, 35.8 + Math.sin(i * 0.7) * 0.5);
+    paver.rotation.y = THREE.MathUtils.degToRad(-8);
+    polish.add(paver);
+  }
+  addRail(5.0, 37.8, 29.5, 34.8, 12);
+  [[8, 39, 0.1], [13, 38.2, -0.15], [18.5, 37.2, 0.1], [24, 36.2, -0.12]].forEach(([x, z, r]) => addBench(x, z, r));
+  [[6.2, 36.8], [12.5, 36.1], [19.2, 35.3], [26.4, 34.5], [34.0, 8.4], [48.0, 8.4]].forEach(([x, z]) => addLamp(x, z));
+
+  for (let i = 0; i < 34; i += 1) {
+    const reed = cylinder(0.018, 0.012, 0.34 + (i % 4) * 0.07, materials.reed, 5);
+    reed.position.set(-8 + i * 1.12, 0.38, 53 + Math.sin(i * 0.9) * 3.2);
+    reed.rotation.z = THREE.MathUtils.degToRad((i % 5) * 3 - 6);
+    polish.add(reed);
+  }
+
+  [[32, 8, 0], [48, 8, 0], [32, -10, Math.PI / 2], [48, -10, Math.PI / 2], [4, -24, 0]].forEach(([x, z, rot]) => addCrosswalk(x, z, rot));
+  [[37.5, 4.8, 0], [42.5, 4.8, 0], [37.5, -4.8, 0], [42.5, -4.8, 0]].forEach(([x, z, r]) => addPlanter(x, z, r));
+  [[35.8, 2.8, 0.25], [44.2, 2.8, -0.25], [35.8, -2.8, -0.25], [44.2, -2.8, 0.25]].forEach(([x, z, r]) => addBench(x, z, r));
+
+  for (let i = 0; i < 10; i += 1) {
+    const tile = box(1.6, 0.03, 0.05, materials.laneMark, 2 + i * 1.42, 0.34, -28.8 - 3.2);
+    tile.userData.noShadow = true;
+    polish.add(tile);
+  }
+
+  return applyShadows(polish);
 }
 
 function addSceneLights() {
@@ -1778,31 +1952,6 @@ function createSpecRoadNetwork() {
 
 function createSpecNaturalBand() {
   const nature = new THREE.Group();
-  const river = [[-72, -8], [-48, -18], [-18, -10], [0, 5], [9, 29], [0, 45], [26, 58], [72, 49]];
-  for (let i = 0; i < river.length - 1; i += 1) {
-    const [ax, az] = river[i];
-    const [bx, bz] = river[i + 1];
-    const dx = bx - ax;
-    const dz = bz - az;
-    const length = Math.hypot(dx, dz);
-    const water = roundedPlane(length + 2.0, 3.2 + (i % 2) * 0.5, 1.3, materials.water);
-    water.position.set((ax + bx) / 2, 0.18, (az + bz) / 2);
-    water.rotation.y = -Math.atan2(dz, dx);
-    nature.add(water);
-  }
-  const lake = roundedPlane(27, 17, 4.2, materials.water);
-  lake.position.set(0, 0.19, 45);
-  nature.add(lake);
-  const pond = roundedPlane(5.0, 3.2, 1.1, materials.water);
-  pond.position.set(-62, 0.2, -38);
-  nature.add(pond);
-
-  [[32, 50, 11.5, SCALE.road.secondary + 1, '#d7d1c5', -8], [-42, -17.5, 8.5, 3.0, '#cfc4ad', -24], [-7, 45, 10, 3.2, '#d8d0bd', 16]].forEach(([x, z, l, w, color, rot]) => {
-    const bridge = box(l, 0.42, w, new THREE.MeshStandardMaterial({ color, roughness: 0.88 }), x, 0.74, z);
-    bridge.rotation.y = THREE.MathUtils.degToRad(rot);
-    nature.add(bridge);
-  });
-
   const hillMat = new THREE.MeshStandardMaterial({ color: '#6f9a5a', roughness: 1 });
   [[-74, 18, 9, 1.4], [-68, 32, 7, 1.1], [68, 32, 8, 1.2], [75, -36, 10, 1.6]].forEach(([x, z, r, sy]) => {
     const hill = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), hillMat);
@@ -1812,8 +1961,9 @@ function createSpecNaturalBand() {
     nature.add(hill);
   });
 
+  const treeAnchors = [[-72, -8], [-48, -18], [-18, -10], [0, 5], [9, 29], [0, 45], [26, 58], [72, 49]];
   for (let i = 0; i < 72; i += 1) {
-    const [baseX, baseZ] = river[i % river.length];
+    const [baseX, baseZ] = treeAnchors[i % treeAnchors.length];
     const tree = createFruitTree(0.55 + (i % 5) * 0.06);
     tree.position.set(baseX + (rand() - 0.5) * 18, 0.1, baseZ + (rand() - 0.5) * 10);
     nature.add(tree);
@@ -2036,25 +2186,171 @@ function createSpecScaleOverlay() {
   });
 }
 
+function createGisDreamOverlay() {
+  const poiLayer = gisLayers.poi;
+  const heatLayer = gisLayers.heat;
+  const storyLayer = gisLayers.story;
+  const heatDefs = [
+    [8, 45, 16, 8, '#78d7ff', 0],
+    [-54, -28, 14, 7, '#ff9a72', 1.2],
+    [50, -12, 20, 12, '#78f1d6', 2.1],
+    [34, 40, 18, 10, '#c2ffe1', 2.8]
+  ];
+  heatDefs.forEach(([x, z, w, d, color, phase]) => {
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.12,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    });
+    const heat = roundedPlane(w, d, 3, material);
+    heat.position.set(x, 0.56, z);
+    heatLayer.add(heat);
+    animated.push((elapsed) => {
+      const pulse = 1 + Math.sin(elapsed * 1.6 + phase) * 0.07;
+      heat.scale.set(pulse, pulse, 1);
+      material.opacity = 0.08 + Math.sin(elapsed * 1.6 + phase) * 0.04;
+    });
+  });
+
+  const poiDefs = [
+    ['家园入口', 2, 7, '#ffd36e'],
+    ['湖岸乐园', 14, 48, '#78d7ff'],
+    ['古镇市集', -54, -26, '#ff9a72'],
+    ['校园主楼', 7, -36, '#fff07c'],
+    ['星庭住宅', 36, 42, '#c2ffe1'],
+    ['晶体塔群', 52, -12, '#78f1d6']
+  ];
+  poiDefs.forEach(([name, x, z, color], index) => {
+    const beacon = new THREE.Group();
+    const beam = cylinder(0.08, 0.22, 5.8, new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false
+    }), 18);
+    beam.userData.noShadow = true;
+    beam.position.y = 3.1;
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(1.2, 0.025, 8, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.78, depthWrite: false }));
+    halo.userData.noShadow = true;
+    halo.rotation.x = Math.PI / 2;
+    halo.position.y = 0.82;
+    const star = new THREE.Mesh(new THREE.OctahedronGeometry(0.34, 0), new THREE.MeshBasicMaterial({ color }));
+    star.userData.noShadow = true;
+    star.position.y = 6.0;
+    beacon.add(beam, halo, star);
+    beacon.position.set(x, 0.2, z);
+    poiLayer.add(beacon);
+    addLabel(name, x, 6.8, z);
+    animated.push((elapsed) => {
+      halo.scale.setScalar(0.82 + Math.sin(elapsed * 2.2 + index) * 0.12);
+      halo.rotation.z += 0.008;
+      star.rotation.y += 0.018;
+      star.position.y = 5.8 + Math.sin(elapsed * 2.5 + index) * 0.25;
+    });
+  });
+
+  const storyMat = new THREE.MeshBasicMaterial({
+    color: '#ffd36e',
+    transparent: true,
+    opacity: 0.68,
+    depthWrite: false
+  });
+  const storyNodes = [
+    ['年味灯会', -56, -21, '#ffd36e'],
+    ['湖岸烟花', 8, 51, '#ff8c9a'],
+    ['归家故事', 1.2, 8.5, '#fff2a6'],
+    ['校园晚读', 9, -34, '#78f1d6']
+  ];
+  storyNodes.forEach(([name, x, z, color], index) => {
+    const node = new THREE.Group();
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(1.6, 0.035, 8, 54),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.72, depthWrite: false })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 1.08;
+    const core = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.34, 0),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.94, depthWrite: false })
+    );
+    core.position.y = 1.16;
+    node.add(ring, core);
+    node.position.set(x, 0.18, z);
+    node.userData.noShadow = true;
+    storyLayer.add(node);
+    addLabel(name, x, 3.0, z);
+    animated.push((elapsed) => {
+      ring.rotation.z -= 0.01;
+      ring.scale.setScalar(0.9 + Math.sin(elapsed * 2.0 + index) * 0.12);
+      core.position.y = 1.14 + Math.sin(elapsed * 2.6 + index) * 0.18;
+    });
+  });
+
+  const fireflies = [];
+  const fireflyGeometry = new THREE.SphereGeometry(0.09, 8, 6);
+  for (let i = 0; i < 42; i += 1) {
+    const fly = new THREE.Mesh(fireflyGeometry, storyMat.clone());
+    fly.userData.noShadow = true;
+    fly.userData.anchor = new THREE.Vector3(-18 + rand() * 58, 1.0 + rand() * 2.2, 14 + rand() * 42);
+    fly.userData.phase = rand() * Math.PI * 2;
+    fly.position.copy(fly.userData.anchor);
+    storyLayer.add(fly);
+    fireflies.push(fly);
+  }
+  animated.push((elapsed) => {
+    fireflies.forEach((fly, i) => {
+      const phase = elapsed * 1.4 + fly.userData.phase;
+      fly.position.set(
+        fly.userData.anchor.x + Math.sin(phase * 0.9) * (0.8 + (i % 4) * 0.2),
+        fly.userData.anchor.y + Math.sin(phase * 1.7) * 0.18,
+        fly.userData.anchor.z + Math.cos(phase * 0.7) * (0.7 + (i % 5) * 0.12)
+      );
+      fly.material.opacity = 0.35 + Math.sin(phase * 2.1) * 0.28;
+    });
+  });
+}
+
 
 function createWalker(color = '#4c8f6a') {
   const person = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.72 });
-  const skinMat = new THREE.MeshStandardMaterial({ color: '#d7a878', roughness: 0.82 });
+  const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.68 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: '#d8aa7e', roughness: 0.78 });
+  const hairMat = new THREE.MeshStandardMaterial({ color: '#2b211b', roughness: 0.86 });
   const legMat = new THREE.MeshStandardMaterial({ color: '#2e3d49', roughness: 0.78 });
-  const body = cylinder(0.16, 0.18, 0.62, bodyMat, 12);
-  body.position.y = 0.78;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 14, 10), skinMat);
-  head.position.y = 1.18;
-  const leftLeg = cylinder(0.045, 0.045, 0.46, legMat, 8);
+
+  const torso = cylinder(0.14, 0.21, 0.58, bodyMat, 14);
+  torso.position.y = 0.78;
+  const shoulders = box(0.48, 0.16, 0.18, bodyMat, 0, 1.03, 0);
+  const neck = cylinder(0.055, 0.06, 0.12, skinMat, 10);
+  neck.position.y = 1.13;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 12), skinMat);
+  head.scale.set(0.9, 1.08, 0.86);
+  head.position.y = 1.29;
+  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.174, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.58), hairMat);
+  hair.position.set(0, 1.35, -0.018);
+  const faceMat = new THREE.MeshBasicMaterial({ color: '#1f2528' });
+  const leftEye = box(0.026, 0.018, 0.012, faceMat, -0.055, 1.3, 0.145);
+  const rightEye = box(0.026, 0.018, 0.012, faceMat, 0.055, 1.3, 0.145);
+  const scarf = box(0.24, 0.045, 0.18, materials.neonAmber, 0, 1.08, 0.025);
+
+  const leftLeg = cylinder(0.038, 0.045, 0.48, legMat, 8);
   const rightLeg = leftLeg.clone();
-  leftLeg.position.set(-0.07, 0.32, 0);
-  rightLeg.position.set(0.07, 0.32, 0);
-  const leftArm = cylinder(0.035, 0.035, 0.48, skinMat, 8);
+  leftLeg.position.set(-0.075, 0.34, 0);
+  rightLeg.position.set(0.075, 0.34, 0);
+  const leftFoot = box(0.09, 0.045, 0.18, materials.rubber, -0.075, 0.085, 0.045);
+  const rightFoot = leftFoot.clone();
+  rightFoot.position.x = 0.075;
+
+  const leftArm = cylinder(0.032, 0.038, 0.5, skinMat, 8);
   const rightArm = leftArm.clone();
-  leftArm.position.set(-0.2, 0.78, 0);
-  rightArm.position.set(0.2, 0.78, 0);
-  person.add(body, head, leftLeg, rightLeg, leftArm, rightArm);
+  leftArm.position.set(-0.27, 0.82, 0);
+  rightArm.position.set(0.27, 0.82, 0);
+  leftArm.rotation.z = THREE.MathUtils.degToRad(-8);
+  rightArm.rotation.z = THREE.MathUtils.degToRad(8);
+
+  person.add(torso, shoulders, neck, head, hair, leftEye, rightEye, scarf, leftLeg, rightLeg, leftFoot, rightFoot, leftArm, rightArm);
   person.userData.limbs = { leftLeg, rightLeg, leftArm, rightArm };
   return applyShadows(person);
 }
@@ -2270,6 +2566,7 @@ function buildScene() {
   scene.add(createIntegratedCityDistrict());
   scene.add(createSpecCbdExpansion());
   scene.add(createLivingWorldActors());
+  scene.add(createMicroPolishDetails());
   playerAvatar = createPlayerAvatar();
   scene.add(playerAvatar);
   const compound = new THREE.Group();
@@ -2285,6 +2582,7 @@ function buildScene() {
   addSceneLights();
   createPlanOverlay();
   createSpecScaleOverlay();
+  createGisDreamOverlay();
   addLabel('正中门厅', 2.1, 4.0, 7.1);
   addLabel('二层前挑', 2.1, 5.2, 6.7);
   addLabel('原双坡屋顶', 2.1, 6.9, 0.5);
@@ -2317,6 +2615,30 @@ function updateUi() {
   detailText.textContent = text;
   document.body.classList.toggle('walking', activeMode === 'walk');
   document.body.classList.toggle('guiding', activeMode === 'guided');
+}
+
+function syncGisLayers() {
+  layerButtons.forEach((button) => {
+    const key = button.dataset.layer;
+    const isActive = Boolean(gisLayerState[key]);
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-pressed', String(isActive));
+    if (gisLayers[key]) gisLayers[key].visible = isActive;
+  });
+}
+
+function updateOpsPanel(elapsed) {
+  if (opsHeartbeat) opsHeartbeat.textContent = ecologyRunning ? '运行中' : '已暂停';
+  if (opsDream) {
+    const storyBoost = gisLayerState.story ? 10 : 0;
+    const intensity = Math.round(70 + storyBoost + Math.sin(elapsed * 0.8) * 6);
+    opsDream.textContent = `梦境强度 ${intensity}%`;
+  }
+  if (opsHeat) {
+    if (!gisLayerState.heat) opsHeat.textContent = '热力已关闭';
+    else if (gisLayerState.story) opsHeat.textContent = '灯会 / 湖岸最高';
+    else opsHeat.textContent = '湖岸 / 古镇最高';
+  }
 }
 
 function setMode(mode) {
@@ -2358,6 +2680,13 @@ function setMode(mode) {
 }
 
 document.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+layerButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const key = button.dataset.layer;
+    gisLayerState[key] = !gisLayerState[key];
+    syncGisLayers();
+  });
+});
 
 window.addEventListener('keydown', (event) => {
   keyState.add(event.code);
@@ -2504,11 +2833,13 @@ function animate() {
     updateGuidedCamera(elapsed);
   }
   if (ecologyRunning || viewMode === 'guided') animated.forEach(update => update(elapsed));
+  updateOpsPanel(elapsed);
   controls.update();
   renderer.render(scene, activeCamera);
 }
 
 buildScene();
 window.dispatchEvent(new Event('resize'));
+syncGisLayers();
 updateUi();
 renderer.setAnimationLoop(animate);
